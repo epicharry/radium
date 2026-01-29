@@ -4,3 +4,4 @@ dist
 *.log
 views.db
 
+.env
