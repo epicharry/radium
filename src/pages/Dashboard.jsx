@@ -295,7 +295,7 @@ export default function Dashboard() {
           console.warn('Database columns missing - using fallback query')
           const { data: fallbackData, error: fallbackError } = await supabase
             .from('profiles')
-            .select('id, auth0_id, email, username, display_name, config, is_active, view_count, user_id, created_at, updated_at')
+            .select('id, supabase_user_id, email, username, display_name, config, is_active, view_count, user_id, created_at, updated_at')
             .eq('id', profile.id)
             .single()
           

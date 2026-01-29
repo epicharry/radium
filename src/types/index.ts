@@ -1,6 +1,6 @@
 export interface Profile {
   id: string
-  auth0_id: string
+  supabase_user_id: string
   email?: string
   username: string
   display_name?: string

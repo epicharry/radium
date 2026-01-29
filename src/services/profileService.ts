@@ -18,15 +18,15 @@ export const profileService = {
     return data
   },
 
-  async getProfileByAuth0Id(auth0Id: string): Promise<Profile | null> {
+  async getProfileBySupabaseUserId(supabaseUserId: string): Promise<Profile | null> {
     const { data, error } = await supabase
       .from('profiles')
       .select('*')
-      .eq('auth0_id', auth0Id)
+      .eq('supabase_user_id', supabaseUserId)
       .maybeSingle()
 
     if (error) {
-      console.error('Error fetching profile by auth0_id:', error)
+      console.error('Error fetching profile by supabase_user_id:', error)
       throw new Error(`Failed to fetch profile: ${error.message}`)
     }
 
@@ -34,7 +34,7 @@ export const profileService = {
   },
 
   async createProfile(profileData: {
-    auth0_id: string
+    supabase_user_id: string
     email?: string
     username: string
     display_name?: string

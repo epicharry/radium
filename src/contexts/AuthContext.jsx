@@ -1,5 +1,4 @@
 import { createContext, useContext, useEffect, useState } from 'react'
-import { useAuth0 } from '@auth0/auth0-react'
 import { supabase } from '../lib/supabase'
 
 const AuthContext = createContext()
@@ -13,85 +12,117 @@ export const useAuth = () => {
 }
 
 export const AuthProvider = ({ children }) => {
-  const { user, isAuthenticated, isLoading, loginWithRedirect, logout } = useAuth0()
+  const [user, setUser] = useState(null)
   const [profile, setProfile] = useState(null)
-  const [loadingProfile, setLoadingProfile] = useState(true)
+  const [isLoading, setIsLoading] = useState(true)
 
   useEffect(() => {
-    if (isAuthenticated && user) {
-      setLoadingProfile(true)
-      const syncUser = async () => {
-        try {
-          console.log('[AuthContext] Syncing user:', user.sub)
-          
-          const { data: existingUser, error: fetchError } = await supabase
-            .from('profiles')
-            .select('*')
-            .eq('auth0_id', user.sub)
-            .maybeSingle()
+    const initAuth = async () => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession()
+        setUser(session?.user ?? null)
 
-          if (fetchError) {
-            console.error('[AuthContext] Error fetching user:', fetchError)
-            setLoadingProfile(false)
-            return
-          }
-
-          if (existingUser) {
-            console.log('[AuthContext] Existing user found:', existingUser.username)
-            setProfile(existingUser)
-            setLoadingProfile(false)
-          } else {
-            console.log('[AuthContext] Creating new user profile...')
-            const tempUsername = `user_${Date.now()}`
-            
-            const { data: newProfile, error: insertError } = await supabase
-              .from('profiles')
-              .insert({
-                auth0_id: user.sub,
-                email: user.email,
-                username: tempUsername,
-                display_name: user.name || user.email?.split('@')[0] || 'User',
-                created_at: new Date().toISOString()
-              })
-              .select()
-              .single()
-
-            if (insertError) {
-              console.error('[AuthContext] Error creating profile:', insertError)
-              setLoadingProfile(false)
-              return
-            }
-            
-            console.log('[AuthContext] New profile created:', newProfile.username)
-            setProfile(newProfile)
-            setLoadingProfile(false)
-          }
-        } catch (error) {
-          console.error('[AuthContext] Error syncing user:', error)
-          setLoadingProfile(false)
+        if (session?.user) {
+          await loadProfile(session.user.id)
         }
+      } catch (error) {
+        console.error('[AuthContext] Error initializing auth:', error)
+      } finally {
+        setIsLoading(false)
+      }
+    }
+
+    initAuth()
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      (async () => {
+        setUser(session?.user ?? null)
+
+        if (session?.user) {
+          await loadProfile(session.user.id)
+        } else {
+          setProfile(null)
+        }
+      })()
+    })
+
+    return () => subscription.unsubscribe()
+  }, [])
+
+  const loadProfile = async (userId) => {
+    try {
+      const { data: existingUser, error: fetchError } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('supabase_user_id', userId)
+        .maybeSingle()
+
+      if (fetchError) {
+        console.error('[AuthContext] Error fetching profile:', fetchError)
+        return
       }
 
-      syncUser()
-    } else {
-      setLoadingProfile(false)
+      if (existingUser) {
+        setProfile(existingUser)
+      } else {
+        const { data: session } = await supabase.auth.getSession()
+        const userEmail = session?.user?.email || ''
+        const tempUsername = `user_${Date.now()}`
+
+        const { data: newProfile, error: insertError } = await supabase
+          .from('profiles')
+          .insert({
+            supabase_user_id: userId,
+            email: userEmail,
+            username: tempUsername,
+            display_name: userEmail?.split('@')[0] || 'User',
+          })
+          .select()
+          .single()
+
+        if (insertError) {
+          console.error('[AuthContext] Error creating profile:', insertError)
+          return
+        }
+
+        setProfile(newProfile)
+      }
+    } catch (error) {
+      console.error('[AuthContext] Error loading profile:', error)
     }
-  }, [isAuthenticated, user])
+  }
+
+  const signUp = async (email, password) => {
+    const { data, error } = await supabase.auth.signUp({
+      email,
+      password,
+    })
+    return { data, error }
+  }
+
+  const signIn = async (email, password) => {
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    })
+    return { data, error }
+  }
+
+  const signOut = async () => {
+    await supabase.auth.signOut()
+    setProfile(null)
+  }
 
   const value = {
     user,
     profile,
-    isAuthenticated,
-    isLoading: isLoading || loadingProfile,
-    login: loginWithRedirect,
-    logout: () => {
-      const returnUrl = `${window.location.origin}/`
-      console.log('[AuthContext] Logging out, returning to:', returnUrl)
-      logout({ 
-        returnTo: returnUrl,
-        federated: false
-      })
-    }
+    isAuthenticated: !!user,
+    isLoading,
+    signUp,
+    signIn,
+    signOut,
+    login: () => window.location.href = '/login',
+    logout: signOut,
   }
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

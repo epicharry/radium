@@ -1,16 +1,20 @@
-import { createContext, useContext, useEffect, useState, useCallback, ReactNode } from 'react'
-import { useAuth0, User } from '@auth0/auth0-react'
+import { createContext, useContext, useEffect, useState, ReactNode } from 'react'
+import { User } from '@supabase/supabase-js'
+import { supabase } from '../lib/supabase'
 import { profileService } from '../services/profileService'
 import { logError, handleApiError } from '../utils/errorHandler'
 import type { Profile } from '../types'
 
 interface AuthContextType {
-  user: User | undefined
+  user: User | null
   profile: Profile | null
   isAuthenticated: boolean
   isLoading: boolean
+  signUp: (email: string, password: string) => Promise<{ data: any; error: any }>
+  signIn: (email: string, password: string) => Promise<{ data: any; error: any }>
+  signOut: () => Promise<void>
   login: () => void
-  logout: () => void
+  logout: () => Promise<void>
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
@@ -28,24 +32,57 @@ interface AuthProviderProps {
 }
 
 export const AuthProvider = ({ children }: AuthProviderProps) => {
-  const { user, isAuthenticated, isLoading, loginWithRedirect, logout: auth0Logout } = useAuth0()
+  const [user, setUser] = useState<User | null>(null)
   const [profile, setProfile] = useState<Profile | null>(null)
-  const [loadingProfile, setLoadingProfile] = useState(true)
+  const [isLoading, setIsLoading] = useState(true)
 
-  const syncUser = useCallback(async () => {
-    if (!user?.sub) return
+  useEffect(() => {
+    const initAuth = async () => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession()
+        setUser(session?.user ?? null)
 
-    setLoadingProfile(true)
+        if (session?.user) {
+          await loadProfile(session.user.id)
+        }
+      } catch (error) {
+        logError(error, 'AuthContext')
+      } finally {
+        setIsLoading(false)
+      }
+    }
+
+    initAuth()
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      (async () => {
+        setUser(session?.user ?? null)
+
+        if (session?.user) {
+          await loadProfile(session.user.id)
+        } else {
+          setProfile(null)
+        }
+      })()
+    })
+
+    return () => subscription.unsubscribe()
+  }, [])
+
+  const loadProfile = async (userId: string) => {
     try {
-      let existingProfile = await profileService.getProfileByAuth0Id(user.sub)
+      let existingProfile = await profileService.getProfileBySupabaseUserId(userId)
 
       if (!existingProfile) {
+        const { data: session } = await supabase.auth.getSession()
+        const userEmail = session?.user?.email || ''
         const tempUsername = `user_${Date.now()}`
+
         existingProfile = await profileService.createProfile({
-          auth0_id: user.sub,
-          email: user.email,
+          supabase_user_id: userId,
+          email: userEmail,
           username: tempUsername,
-          display_name: user.name || user.email?.split('@')[0] || 'User',
+          display_name: userEmail?.split('@')[0] || 'User',
         })
       }
 
@@ -53,36 +90,41 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
     } catch (error) {
       logError(error, 'AuthContext')
       const apiError = handleApiError(error)
-      console.error('[AuthContext] Error syncing user:', apiError.message)
-    } finally {
-      setLoadingProfile(false)
+      console.error('[AuthContext] Error loading profile:', apiError.message)
     }
-  }, [user])
+  }
 
-  useEffect(() => {
-    if (isAuthenticated && user) {
-      syncUser()
-    } else {
-      setLoadingProfile(false)
-      setProfile(null)
-    }
-  }, [isAuthenticated, user, syncUser])
-
-  const logout = useCallback(() => {
-    const returnUrl = `${window.location.origin}/`
-    auth0Logout({
-      returnTo: returnUrl,
-      federated: false,
+  const signUp = async (email: string, password: string) => {
+    const { data, error } = await supabase.auth.signUp({
+      email,
+      password,
     })
-  }, [auth0Logout])
+    return { data, error }
+  }
+
+  const signIn = async (email: string, password: string) => {
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    })
+    return { data, error }
+  }
+
+  const signOut = async () => {
+    await supabase.auth.signOut()
+    setProfile(null)
+  }
 
   const value: AuthContextType = {
     user,
     profile,
-    isAuthenticated,
-    isLoading: isLoading || loadingProfile,
-    login: loginWithRedirect,
-    logout,
+    isAuthenticated: !!user,
+    isLoading,
+    signUp,
+    signIn,
+    signOut,
+    login: () => window.location.href = '/login',
+    logout: signOut,
   }
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
